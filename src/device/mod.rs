@@ -37,6 +37,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::thread::JoinHandle;
+use std::process::Command;
+use std::str::FromStr;
+use std::str;
 
 use crate::allowed_ips::*;
 use crate::crypto::x25519::*;
@@ -91,12 +94,15 @@ pub struct DeviceHandle {
     threads: Vec<JoinHandle<()>>,
 }
 
+// TODO: add listen port to config
 pub struct DeviceConfig {
     pub n_threads: usize,
     pub log_level: Verbosity,
     pub use_connected_socket: bool,
     #[cfg(target_os = "linux")]
     pub use_multi_queue: bool,
+    pub peer_auth_script: Option<String>,
+    pub listen_port: u16,
 }
 
 impl Default for DeviceConfig {
@@ -107,6 +113,8 @@ impl Default for DeviceConfig {
             use_connected_socket: true,
             #[cfg(target_os = "linux")]
             use_multi_queue: true,
+            peer_auth_script: None,
+            listen_port: 0,
         }
     }
 }
@@ -148,8 +156,9 @@ struct ThreadData {
 impl DeviceHandle {
     pub fn new(name: &str, config: DeviceConfig) -> Result<DeviceHandle, Error> {
         let n_threads = config.n_threads;
+        let port = config.listen_port.clone();
         let mut wg_interface = Device::new(name, config)?;
-        wg_interface.open_listen_socket(0)?; // Start listening on a random port
+        wg_interface.open_listen_socket(port)?; // Start listening on a random port
 
         let interface_lock = Arc::new(Lock::new(wg_interface));
 
@@ -574,16 +583,19 @@ impl Device {
         self.queue.new_event(
             udp.as_raw_fd(),
             Box::new(move |d, t| {
+                
                 // Handler that handles anonymous packets over UDP
                 let mut iter = MAX_ITR;
-                let (private_key, public_key) = d.key_pair.as_ref().expect("Key not set");
-
-                let rate_limiter = d.rate_limiter.as_ref().unwrap();
-
+                
                 // Loop while we have packets on the anonymous connection
                 while let Ok((addr, packet)) = udp.recvfrom(&mut t.src_buf[..]) {
+
+                    let (private_key, public_key) = d.key_pair.as_ref().expect("No Private Key set");
+                    
                     // The rate limiter initially checks mac1 and mac2, and optionally asks to send a cookie
-                    let parsed_packet =
+                    let parsed_packet = {
+
+                        let rate_limiter = d.rate_limiter.as_ref().unwrap();
                         match rate_limiter.verify_packet(Some(addr.ip()), packet, &mut t.dst_buf) {
                             Ok(packet) => packet,
                             Err(TunnResult::WriteToNetwork(cookie)) => {
@@ -591,20 +603,27 @@ impl Device {
                                 continue;
                             }
                             Err(_) => continue,
-                        };
-
-                    let peer = match &parsed_packet {
-                        Packet::HandshakeInit(p) => {
-                            parse_handshake_anon(&private_key, &public_key, &p)
-                                .ok()
-                                .and_then(|hh| {
-                                    d.peers
-                                        .get(&X25519PublicKey::from(&hh.peer_static_public[..]))
-                                })
                         }
-                        Packet::HandshakeResponse(p) => d.peers_by_idx.get(&(p.receiver_idx >> 8)),
-                        Packet::PacketCookieReply(p) => d.peers_by_idx.get(&(p.receiver_idx >> 8)),
-                        Packet::PacketData(p) => d.peers_by_idx.get(&(p.receiver_idx >> 8)),
+
+                    };
+                    
+                    // find the peer
+                    let peer = {
+                        match &parsed_packet {
+                            Packet::HandshakeInit(p) => {
+                                match parse_handshake_anon(&private_key, &public_key, &p) {
+                                    Ok(hh) => {
+                                        check_auth(&hh, d);
+                                        d.peers
+                                            .get(&X25519PublicKey::from(&hh.peer_static_public[..]))
+                                    },
+                                    Err(_) => None, 
+                                }
+                            }
+                            Packet::HandshakeResponse(p) => d.peers_by_idx.get(&(p.receiver_idx >> 8)),
+                            Packet::PacketCookieReply(p) => d.peers_by_idx.get(&(p.receiver_idx >> 8)),
+                            Packet::PacketData(p) => d.peers_by_idx.get(&(p.receiver_idx >> 8)),
+                        }
                     };
 
                     let peer = match peer {
@@ -792,4 +811,87 @@ impl Device {
         )?;
         Ok(())
     }
+
+}
+
+// check external auth for the provided public key, if it exists, create a new peer and return it
+fn check_auth (hh: &handshake::HalfHandshake, d: &mut LockReadGuard<Device>) {
+    
+    // // We need to get a write lock on the device first
+    let mut write_mark = match d.mark_want_write() {
+        None => return,
+        Some(lock) => lock,
+    };
+
+    write_mark.trigger_yield();
+    let mut device = write_mark.write();
+    device.cancel_yield();
+
+    let pub_key = &X25519PublicKey::from(&hh.peer_static_public[..]);
+    
+    // check if we have a peer already and return
+    if device.peers.get(pub_key).is_some() {
+        return;
+    }
+
+    // check if we have an auth script to try
+    let auth_script = match &device.config.peer_auth_script {
+        Some(auth_script) => auth_script,
+        None => return
+    };
+    
+    //call the auth script
+    let pk_string = String::from_utf8(pub_key.as_bytes().to_vec()).unwrap_or(String::new());
+
+    // pass the cached pubkey to auth script
+    let marvin = Command::new(auth_script)
+                        .arg("wg")
+                        .arg("--pubkey")
+                        .arg(pk_string)
+                        .output();
+
+    //if marvin ok, parse the allowed IP
+    let allowed_ip = match marvin {
+        Ok(out) => {
+            AllowedIP::from_str(
+                str::from_utf8(
+                    out.stdout.as_slice()
+                ).unwrap_or("")
+            ).ok()
+        },
+        Err(_) => None,
+    };
+
+    //If we have an IP, add this peer
+    match allowed_ip {
+        Some(ip) => {
+            set_peer(&mut device, X25519PublicKey::from(&hh.peer_static_public[..]), vec![ip]);   
+        },
+        None => return
+    }
+    
+}
+
+fn set_peer(
+    d: &mut Device,
+    pub_key: X25519PublicKey,
+    allowed_ips: Vec<AllowedIP>,
+){
+
+    let remove = false;
+    let replace_ips = false;
+    let endpoint = None;
+    let keepalive = None;
+    let preshared_key = None;
+    
+    d.update_peer(
+        pub_key,
+        remove,
+        replace_ips,
+        endpoint,
+        allowed_ips,
+        keepalive,
+        preshared_key,
+    );
+
 }

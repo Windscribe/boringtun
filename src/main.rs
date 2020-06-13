@@ -51,6 +51,18 @@ fn main() {
                 .env("WG_THREADS")
                 .help("Number of OS threads to use")
                 .default_value("4"),
+            Arg::with_name("listen-port")
+                .takes_value(true)
+                .long("listen-port")
+                .short("-p")
+                .env("WG_LISTEN_PORT")
+                .help("The port to listen on at start"),
+            Arg::with_name("peer-auth")
+                .takes_value(true)
+                .long("peer-auth")
+                .short("-a")
+                .env("WG_PEER_AUTH")
+                .help("External auth script to call for unknown peers"),
             Arg::with_name("verbosity")
                 .takes_value(true)
                 .long("verbosity")
@@ -91,6 +103,8 @@ fn main() {
     let tun_name = matches.value_of("INTERFACE_NAME").unwrap();
     let n_threads = value_t!(matches.value_of("threads"), usize).unwrap_or_else(|e| e.exit());
     let log_level = value_t!(matches.value_of("verbosity"), Verbosity).unwrap_or_else(|e| e.exit());
+    let peer_auth = matches.value_of("peer-auth").unwrap_or_default();
+    let listen_port: u16 = matches.value_of("listen-port").unwrap_or_default().parse().unwrap_or_default();
 
     // Create a socketpair to communicate between forked processes
     let (sock1, sock2) = UnixDatagram::pair().unwrap();
@@ -134,6 +148,8 @@ fn main() {
         use_connected_socket: !matches.is_present("disable-connected-udp"),
         #[cfg(target_os = "linux")]
         use_multi_queue: !matches.is_present("disable-multi-queue"),
+        peer_auth_script: Some(peer_auth.to_string()),
+        listen_port: listen_port,
     };
 
     let mut device_handle = match DeviceHandle::new(&tun_name, config) {
