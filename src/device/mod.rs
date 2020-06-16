@@ -819,7 +819,10 @@ fn check_auth (hh: &handshake::HalfHandshake, d: &mut LockReadGuard<Device>) {
     
     // // We need to get a write lock on the device first
     let mut write_mark = match d.mark_want_write() {
-        None => return,
+        None => {
+            eprintln!("check_auth could not get device lock");
+            return
+        },
         Some(lock) => lock,
     };
 
@@ -843,21 +846,20 @@ fn check_auth (hh: &handshake::HalfHandshake, d: &mut LockReadGuard<Device>) {
     //call the auth script
     let pk_string = String::from_utf8(pub_key.as_bytes().to_vec()).unwrap_or(String::new());
 
-    // pass the cached pubkey to auth script
-    let marvin = Command::new(auth_script)
+    // pass the cached pubkey to auth script: this MUST return ip in CIDR format x.x.x.x/32
+    let external_auth = Command::new(auth_script)
                         .arg("wg")
                         .arg("--pubkey")
                         .arg(pk_string)
                         .output();
 
-    //if marvin ok, parse the allowed IP
-    let allowed_ip = match marvin {
+    //if external_auth ok, parse the allowed IP
+    let allowed_ip = match external_auth {
         Ok(out) => {
-            AllowedIP::from_str(
-                str::from_utf8(
-                    out.stdout.as_slice()
-                ).unwrap_or("")
-            ).ok()
+            let ip = str::from_utf8(
+                out.stdout.as_slice()
+            ).unwrap_or("").replace('\n', "");
+            AllowedIP::from_str(&ip).ok()
         },
         Err(_) => None,
     };
