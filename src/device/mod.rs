@@ -853,23 +853,31 @@ fn check_auth (hh: &handshake::HalfHandshake, d: &mut LockReadGuard<Device>) {
                         .arg(pk_string)
                         .output();
 
-    //if external_auth ok, parse the allowed IP
-    let allowed_ip = match external_auth {
-        Ok(out) => {
-            let ip = str::from_utf8(
-                out.stdout.as_slice()
-            ).unwrap_or("").replace('\n', "");
-            AllowedIP::from_str(&ip).ok()
-        },
-        Err(_) => None,
-    };
-
-    //If we have an IP, add this peer
-    match allowed_ip {
-        Some(ip) => {
-            set_peer(&mut device, X25519PublicKey::from(&hh.peer_static_public[..]), vec![ip]);   
-        },
-        None => return
+    // response should contain the allowed ip + preshared-key seperated by new lines
+    if let Ok(out) = external_auth {
+        let auth_data = String::from_utf8(out.stdout).unwrap_or(String::from(""));
+        if auth_data.len() > 0 {
+            let auth_parts: Vec<&str> = auth_data.split("\n").collect();
+            if auth_parts.len() >= 2 {
+                let ip = AllowedIP::from_str(&auth_parts[0]).ok();
+                let psk_bytes = auth_parts[1].as_bytes();
+                if psk_bytes.len() == 32 {
+                    let mut psk: [u8; 32] = Default::default();
+                    psk.copy_from_slice(psk_bytes);
+                    match ip {
+                        Some(allowed_ip) => {
+                            set_peer(
+                                &mut device, 
+                                X25519PublicKey::from(&hh.peer_static_public[..]), 
+                                vec![allowed_ip],
+                                Some(psk),
+                            );   
+                        },
+                        None => return
+                    }
+                }
+            }
+        }
     }
     
 }
@@ -878,13 +886,13 @@ fn set_peer(
     d: &mut Device,
     pub_key: X25519PublicKey,
     allowed_ips: Vec<AllowedIP>,
+    preshared_key: Option<[u8; 32]>,
 ){
 
     let remove = false;
     let replace_ips = false;
     let endpoint = None;
     let keepalive = None;
-    let preshared_key = None;
     
     d.update_peer(
         pub_key,
