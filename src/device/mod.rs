@@ -860,21 +860,26 @@ fn check_auth (hh: &handshake::HalfHandshake, d: &mut LockReadGuard<Device>) {
             let auth_parts: Vec<&str> = auth_data.split("\n").collect();
             if auth_parts.len() >= 2 {
                 let ip = AllowedIP::from_str(&auth_parts[0]).ok();
-                let psk_bytes = auth_parts[1].as_bytes();
-                if psk_bytes.len() == 32 {
-                    let mut psk: [u8; 32] = Default::default();
-                    psk.copy_from_slice(psk_bytes);
-                    match ip {
-                        Some(allowed_ip) => {
-                            set_peer(
-                                &mut device, 
-                                X25519PublicKey::from(&hh.peer_static_public[..]), 
-                                vec![allowed_ip],
-                                Some(psk),
-                            );   
-                        },
-                        None => return
-                    }
+                // parse the pre shared key
+                match auth_parts[1].parse::<X25519PublicKey>() {
+                    Ok(preshared_key) => {
+                        let psk = Some(make_array(preshared_key.as_bytes()));
+                        match ip {
+                            Some(allowed_ip) => {
+                                set_peer(
+                                    &mut device, 
+                                    X25519PublicKey::from(&hh.peer_static_public[..]), 
+                                    vec![allowed_ip],
+                                    psk,
+                                );   
+                            },
+                            None => return
+                        }
+                    },
+                    Err(e) => {
+                        eprintln!("could not parse psk: {:?}", e);
+                        return
+                    },
                 }
             }
         }
