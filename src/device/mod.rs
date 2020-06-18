@@ -40,6 +40,7 @@ use std::thread::JoinHandle;
 use std::process::Command;
 use std::str::FromStr;
 use std::str;
+use hex::encode as encode_hex;
 
 use crate::allowed_ips::*;
 use crate::crypto::x25519::*;
@@ -843,22 +844,11 @@ fn check_auth (hh: &handshake::HalfHandshake, d: &mut LockReadGuard<Device>) {
         return;
     }
 
-    //parse the public key
-    let pk_string = match String::from_utf8(pub_key.as_bytes().to_vec()) {
-        Ok(pk) => pk,
-        Err(e) => {
-            eprintln!("error parsing public key: {}", e);
-            eprintln!("public key bytes: {:?}", pub_key.as_bytes());
-            eprintln!("lossy output: {}", String::from_utf8_lossy(pub_key.as_bytes()));
-            return
-        }
-    };
-
     // call auth script: this MUST return ip in CIDR format x.x.x.x/32
     let external_auth = Command::new(auth_script)
                         .arg("wg")
                         .arg("--pubkey")
-                        .arg(pk_string)
+                        .arg(base64::encode(pub_key.as_bytes()))
                         .output();
 
     // response should contain the allowed ip + preshared-key seperated by new lines
