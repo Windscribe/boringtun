@@ -40,7 +40,6 @@ use std::thread::JoinHandle;
 use std::process::Command;
 use std::str::FromStr;
 use std::str;
-use hex::encode as encode_hex;
 
 use crate::allowed_ips::*;
 use crate::crypto::x25519::*;
