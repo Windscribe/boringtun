@@ -830,6 +830,12 @@ fn check_auth (hh: &handshake::HalfHandshake, d: &mut LockReadGuard<Device>) {
     let mut device = write_mark.write();
     device.cancel_yield();
 
+    // check if we have an auth script to try
+    let auth_script = match &device.config.peer_auth_script {
+        Some(auth_script) => auth_script,
+        None => return
+    };
+
     let pub_key = &X25519PublicKey::from(&hh.peer_static_public[..]);
     
     // check if we have a peer already and return
@@ -837,16 +843,18 @@ fn check_auth (hh: &handshake::HalfHandshake, d: &mut LockReadGuard<Device>) {
         return;
     }
 
-    // check if we have an auth script to try
-    let auth_script = match &device.config.peer_auth_script {
-        Some(auth_script) => auth_script,
-        None => return
+    //parse the public key
+    let pk_string = match String::from_utf8(pub_key.as_bytes().to_vec()) {
+        Ok(pk) => pk,
+        Err(e) => {
+            eprintln!("error parsing public key: {}", e);
+            eprintln!("public key bytes: {:?}", pub_key.as_bytes());
+            eprintln!("lossy output: {}", String::from_utf8_lossy(pub_key.as_bytes()));
+            return
+        }
     };
-    
-    //call the auth script
-    let pk_string = String::from_utf8(pub_key.as_bytes().to_vec()).unwrap_or(String::new());
 
-    // pass the cached pubkey to auth script: this MUST return ip in CIDR format x.x.x.x/32
+    // call auth script: this MUST return ip in CIDR format x.x.x.x/32
     let external_auth = Command::new(auth_script)
                         .arg("wg")
                         .arg("--pubkey")
