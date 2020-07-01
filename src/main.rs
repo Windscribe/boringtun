@@ -16,7 +16,6 @@ use std::fs::File;
 use std::fs;
 use std::os::unix::net::UnixDatagram;
 use std::process::exit;
-use std::net::{IpAddr};
 use std::process::Command;
 
 fn check_tun_name(_v: String) -> Result<(), String> {
@@ -31,14 +30,6 @@ fn check_tun_name(_v: String) -> Result<(), String> {
     #[cfg(not(target_os = "macos"))]
     {
         Ok(())
-    }
-}
-
-fn check_address(_v: String) -> Result<(), String> {
-    if _v.parse::<IpAddr>().is_ok() {
-        Ok(())
-    } else {
-        Err("Invalid interface address provided".to_owned())
     }
 }
 
@@ -71,7 +62,6 @@ fn main() {
                 .help("Path to the private key"),
             Arg::with_name("address")
                 .takes_value(true)
-                .validator(check_address)
                 .long("address")
                 .short("-i")
                 .env("WG_IFACE_ADDR")
@@ -137,9 +127,12 @@ fn main() {
     //if init_pkey is set, read it and parse it
     if init_pkey.len() > 0 {
         let contents = fs::read_to_string(init_pkey).expect("could not read private key file");
-        private_key = match contents.parse::<X25519SecretKey>() {
+        private_key = match contents.trim().parse::<X25519SecretKey>() {
             Ok(key) => Some(key),
-            Err(_) => None,
+            Err(e) => {
+                eprintln!("Failed to parse private key: {:?}", e);
+                exit(1);
+            },
         };
     }
     
