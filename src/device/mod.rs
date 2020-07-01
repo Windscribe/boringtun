@@ -154,10 +154,14 @@ struct ThreadData {
 }
 
 impl DeviceHandle {
-    pub fn new(name: &str, config: DeviceConfig) -> Result<DeviceHandle, Error> {
+    pub fn new(name: &str, config: DeviceConfig, pkey: Option<X25519SecretKey>) -> Result<DeviceHandle, Error> {
         let n_threads = config.n_threads;
         let port = config.listen_port.clone();
         let mut wg_interface = Device::new(name, config)?;
+        // set private key if provided
+        if let Some(private_key) = pkey {
+            wg_interface.set_key(private_key);
+        }
         wg_interface.open_listen_socket(port)?; // Start listening on a random port
 
         let interface_lock = Arc::new(Lock::new(wg_interface));

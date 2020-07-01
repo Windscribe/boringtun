@@ -6,14 +6,18 @@ mod device;
 pub mod ffi;
 pub mod noise;
 
+use crypto::x25519::X25519SecretKey;
 use crate::device::drop_privileges::*;
 use crate::device::*;
 use crate::noise::Verbosity;
 use clap::{value_t, App, Arg};
 use daemonize::Daemonize;
 use std::fs::File;
+use std::fs;
 use std::os::unix::net::UnixDatagram;
 use std::process::exit;
+use std::net::{IpAddr};
+use std::process::Command;
 
 fn check_tun_name(_v: String) -> Result<(), String> {
     #[cfg(target_os = "macos")]
@@ -27,6 +31,14 @@ fn check_tun_name(_v: String) -> Result<(), String> {
     #[cfg(not(target_os = "macos"))]
     {
         Ok(())
+    }
+}
+
+fn check_address(_v: String) -> Result<(), String> {
+    if _v.parse::<IpAddr>().is_ok() {
+        Ok(())
+    } else {
+        Err("Invalid interface address provided".to_owned())
     }
 }
 
@@ -51,6 +63,19 @@ fn main() {
                 .env("WG_THREADS")
                 .help("Number of OS threads to use")
                 .default_value("4"),
+            Arg::with_name("private-key")
+                .takes_value(true)
+                .long("private-key")
+                .short("-k")
+                .env("WG_PRIVATE_KEY")
+                .help("Path to the private key"),
+            Arg::with_name("address")
+                .takes_value(true)
+                .validator(check_address)
+                .long("address")
+                .short("-i")
+                .env("WG_IFACE_ADDR")
+                .help("Interface address"),
             Arg::with_name("listen-port")
                 .takes_value(true)
                 .long("listen-port")
@@ -105,7 +130,19 @@ fn main() {
     let log_level = value_t!(matches.value_of("verbosity"), Verbosity).unwrap_or_else(|e| e.exit());
     let peer_auth = matches.value_of("peer-auth").unwrap_or_default();
     let listen_port: u16 = matches.value_of("listen-port").unwrap_or_default().parse().unwrap_or_default();
-
+    let init_pkey = matches.value_of("private-key").unwrap_or_default();
+    let init_address = matches.value_of("address").unwrap_or_default();
+    
+    let mut private_key = None;
+    //if init_pkey is set, read it and parse it
+    if init_pkey.len() > 0 {
+        let contents = fs::read_to_string(init_pkey).expect("could not read private key file");
+        private_key = match contents.parse::<X25519SecretKey>() {
+            Ok(key) => Some(key),
+            Err(_) => None,
+        };
+    }
+    
     // Create a socketpair to communicate between forked processes
     let (sock1, sock2) = UnixDatagram::pair().unwrap();
     let _ = sock1.set_nonblocking(true);
@@ -152,7 +189,7 @@ fn main() {
         listen_port: listen_port,
     };
 
-    let mut device_handle = match DeviceHandle::new(&tun_name, config) {
+    let mut device_handle = match DeviceHandle::new(&tun_name, config, private_key) {
         Ok(d) => d,
         Err(e) => {
             // Notify parent that tunnel initialization failed
@@ -168,6 +205,31 @@ fn main() {
             sock1.send(&[0]).unwrap();
             exit(1);
         }
+    }
+
+    //set the interface address if provided, and bring up the interface
+    if init_address.len() > 0 {
+        if let Err(e) = Command::new("/sbin/ip")
+                        .arg("addr")
+                        .arg("add")
+                        .arg(init_address)
+                        .arg("dev")
+                        .arg(tun_name)
+                        .status() {
+                            eprintln!("Failed to add interface address: {:?}", e);
+                            sock1.send(&[0]).unwrap();
+                            exit(1);
+                        }
+        if let Err(e) = Command::new("/sbin/ip")
+                        .arg("link")
+                        .arg("set")
+                        .arg(tun_name)
+                        .arg("up")
+                        .status() {
+                            eprintln!("Failed to bring up interface: {:?}", e);
+                            sock1.send(&[0]).unwrap();
+                            exit(1);
+                        }
     }
 
     // Notify parent that tunnel initialization succeeded
