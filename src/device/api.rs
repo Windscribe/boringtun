@@ -178,7 +178,7 @@ fn api_get_json(writer: &mut BufWriter<&UnixStream>, d: &Device) -> i32 {
         
         let mut peer = json::JsonValue::new_object();
 
-        peer["public_key"] = encode_hex(k.as_bytes()).into();
+        peer["public_key"] = base64::encode(k.as_bytes()).into();
 
         if let Some(keepalive) = p.persistent_keepalive() {
             peer["persistent_keepalive_interval"] = keepalive.into();
@@ -188,10 +188,8 @@ fn api_get_json(writer: &mut BufWriter<&UnixStream>, d: &Device) -> i32 {
             peer["fwmark"] = fwmark.into();
         }
 
-        for (_, ip, cidr) in p.allowed_ips() {
-            let mut owned_ip: String = ip.to_string().to_owned();
-            owned_ip.push_str(&cidr.to_string());
-            peer["allowed_ip"] = owned_ip.into();
+        for (_, ip, _) in p.allowed_ips() {
+            peer["allowed_ip"] = ip.to_string().into();
         }
 
         if let Some(time) = p.time_since_last_handshake() {
