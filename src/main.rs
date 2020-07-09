@@ -72,6 +72,13 @@ fn main() {
                 .short("-p")
                 .env("WG_LISTEN_PORT")
                 .help("The port to listen on at start"),
+            Arg::with_name("mtu")
+                .takes_value(true)
+                .long("mtu")
+                .short("-m")
+                .env("WG_MTU")
+                .default_value("1420")
+                .help("Set MTU for the interface"),
             Arg::with_name("peer-auth")
                 .takes_value(true)
                 .long("peer-auth")
@@ -122,7 +129,8 @@ fn main() {
     let listen_port: u16 = matches.value_of("listen-port").unwrap_or_default().parse().unwrap_or_default();
     let init_pkey = matches.value_of("private-key").unwrap_or_default();
     let init_address = matches.value_of("address").unwrap_or_default();
-    
+    let init_mtu = matches.value_of("mtu").unwrap_or_default();
+
     let mut private_key = None;
     //if init_pkey is set, read it and parse it
     if init_pkey.len() > 0 {
@@ -220,6 +228,21 @@ fn main() {
                         .arg("up")
                         .status() {
                             eprintln!("Failed to bring up interface: {:?}", e);
+                            sock1.send(&[0]).unwrap();
+                            exit(1);
+                        }
+    }
+
+    //set the interface mtu
+    if init_mtu.len() > 0 {
+        if let Err(e) = Command::new("/sbin/ip")
+                        .arg("link")
+                        .arg("set")
+                        .arg(tun_name)
+                        .arg("mtu")
+                        .arg(init_mtu)
+                        .status() {
+                            eprintln!("Failed to interface MTU: {:?}", e);
                             sock1.send(&[0]).unwrap();
                             exit(1);
                         }
