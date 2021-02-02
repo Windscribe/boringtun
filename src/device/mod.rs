@@ -52,6 +52,7 @@ use crate::peer::*;
 use crate::poll::*;
 use crate::tun::*;
 use crate::udp::*;
+use rand::{thread_rng, Rng};
 
 const HANDSHAKE_RATE_LIMIT: u64 = 100; // The number of handshakes per second we can tolerate before using cookies
 
@@ -421,17 +422,17 @@ impl Device {
             port = udp_sock4.port()?;
         }
 
-        let udp_sock6 = Arc::new(
-            UDPSocket::new6()?
-                .set_non_blocking()?
-                .set_reuse()?
-                .bind(port)?,
-        );
+        // let udp_sock6 = Arc::new(
+        //     UDPSocket::new6()?
+        //         .set_non_blocking()?
+        //         .set_reuse()?
+        //         .bind(port)?,
+        // );
 
         self.register_udp_handler(Arc::clone(&udp_sock4))?;
-        self.register_udp_handler(Arc::clone(&udp_sock6))?;
+        //self.register_udp_handler(Arc::clone(&udp_sock6))?;
         self.udp4 = Some(udp_sock4);
-        self.udp6 = Some(udp_sock6);
+        //self.udp6 = Some(udp_sock6);
 
         self.listen_port = port;
 
@@ -488,7 +489,7 @@ impl Device {
 
         // Then on all currently connected sockets
         for peer in self.peers.values() {
-            if let Some(ref sock) = peer.endpoint().conn {
+            for sock in &peer.endpoint().conn {
                 sock.set_fwmark(mark)?
             }
         }
@@ -672,9 +673,11 @@ impl Device {
                     let ip_addr = addr.ip();
                     peer.set_endpoint(addr);
                     if d.config.use_connected_socket {
-                        if let Ok(sock) = peer.connect_endpoint(d.listen_port, d.fwmark) {
-                            d.register_conn_handler(Arc::clone(peer), sock, ip_addr)
-                                .unwrap();
+                        for _ in 0..d.config.n_threads{
+                            if let Ok(sock) = peer.connect_endpoint(d.listen_port, d.config.n_threads, d.fwmark) {
+                                d.register_conn_handler(Arc::clone(peer), sock, ip_addr)
+                                    .unwrap();
+                            }
                         }
                     }
 
@@ -796,9 +799,10 @@ impl Device {
                         TunnResult::Err(e) => eprintln!("Encapsulate error {:?}", e),
                         TunnResult::WriteToNetwork(packet) => {
                             let endpoint = peer.endpoint();
-                            if let Some(ref conn) = endpoint.conn {
+                            if endpoint.conn.len() > 0 {
                                 // Prefer to send using the connected socket
-                                conn.write(packet);
+                                let num = thread_rng().gen_range(0, endpoint.conn.len()-1);
+                                endpoint.conn[num].write(packet);
                             } else if let Some(addr @ SocketAddr::V4(_)) = endpoint.addr {
                                 udp4.sendto(packet, addr);
                             } else if let Some(addr @ SocketAddr::V6(_)) = endpoint.addr {

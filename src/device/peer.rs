@@ -10,7 +10,7 @@ use std::str::FromStr;
 #[derive(Default, Debug)]
 pub struct Endpoint {
     pub addr: Option<SocketAddr>,
-    pub conn: Option<Arc<UDPSocket>>,
+    pub conn: Vec<Arc<UDPSocket>>,
 }
 
 pub struct Peer {
@@ -58,7 +58,7 @@ impl Peer {
             index,
             endpoint: spin::RwLock::new(Endpoint {
                 addr: endpoint,
-                conn: None,
+                conn: Default::default(),
             }),
             allowed_ips: allowed_ips.iter().collect(),
             preshared_key,
@@ -74,9 +74,10 @@ impl Peer {
     }
 
     pub fn shutdown_endpoint(&self) {
-        if let Some(conn) = self.endpoint.write().conn.take() {
-            self.log(Verbosity::Info, "Disconnecting from endpoint");
-            conn.shutdown();
+        let endpoint = self.endpoint.write();
+        for cx in &endpoint.conn {
+            self.log(Verbosity::Info, "Disconnecting endpoint socket");
+            cx.shutdown();
         }
     }
 
@@ -84,13 +85,11 @@ impl Peer {
         let mut endpoint = self.endpoint.write();
         if endpoint.addr != Some(addr) {
             // We only need to update the endpoint if it differs from the current one
-            if let Some(conn) = endpoint.conn.take() {
-                conn.shutdown();
-            }
+            self.shutdown_endpoint();
 
             *endpoint = Endpoint {
                 addr: Some(addr),
-                conn: None,
+                conn: Default::default(),
             }
         };
     }
@@ -98,11 +97,13 @@ impl Peer {
     pub fn connect_endpoint(
         &self,
         port: u16,
+        threads: usize,
         fwmark: Option<u32>,
     ) -> Result<Arc<UDPSocket>, Error> {
         let mut endpoint = self.endpoint.write();
 
-        if endpoint.conn.is_some() {
+        // This should be tied to threads
+        if endpoint.conn.len() >= threads {
             return Err(Error::Connect("Connected".to_owned()));
         }
 
@@ -129,7 +130,7 @@ impl Peer {
             &format!("Connected endpoint :{}->{}", port, endpoint.addr.unwrap()),
         );
 
-        endpoint.conn = Some(Arc::clone(&udp_conn));
+        endpoint.conn.push(Arc::clone(&udp_conn));
 
         Ok(udp_conn)
     }
