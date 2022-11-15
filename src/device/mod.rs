@@ -850,6 +850,7 @@ fn check_auth (hh: &handshake::HalfHandshake, remote_addr: IpAddr, d: &mut LockR
     // call auth script: this MUST return ip in CIDR format x.x.x.x/32
     let external_auth = Command::new(auth_script)
                         .arg("wg")
+                        .arg("up")
                         .arg("--pubkey")
                         .arg(base64::encode(pub_key.as_bytes()))
                         .arg("--remote-ip")
