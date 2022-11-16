@@ -587,15 +587,15 @@ impl Device {
         self.queue.new_event(
             udp.as_raw_fd(),
             Box::new(move |d, t| {
-                
+
                 // Handler that handles anonymous packets over UDP
                 let mut iter = MAX_ITR;
-                
+
                 // Loop while we have packets on the anonymous connection
                 while let Ok((addr, packet)) = udp.recvfrom(&mut t.src_buf[..]) {
 
                     let (private_key, public_key) = d.key_pair.as_ref().expect("No Private Key set");
-                    
+
                     // The rate limiter initially checks mac1 and mac2, and optionally asks to send a cookie
                     let parsed_packet = {
 
@@ -610,18 +610,18 @@ impl Device {
                         }
 
                     };
-                    
+
                     // find the peer
                     let peer = {
                         match &parsed_packet {
                             Packet::HandshakeInit(p) => {
                                 match parse_handshake_anon(&private_key, &public_key, &p) {
                                     Ok(hh) => {
-                                        check_auth(&hh, d);
+                                        check_auth(&hh, addr.ip(), d);
                                         d.peers
                                             .get(&X25519PublicKey::from(&hh.peer_static_public[..]))
                                     },
-                                    Err(_) => None, 
+                                    Err(_) => None,
                                 }
                             }
                             Packet::HandshakeResponse(p) => d.peers_by_idx.get(&(p.receiver_idx >> 8)),
@@ -819,8 +819,8 @@ impl Device {
 }
 
 // check external auth for the provided public key, if it exists, create a new peer and return it
-fn check_auth (hh: &handshake::HalfHandshake, d: &mut LockReadGuard<Device>) {
-    
+fn check_auth (hh: &handshake::HalfHandshake, remote_addr: IpAddr, d: &mut LockReadGuard<Device>) {
+
     // // We need to get a write lock on the device first
     let mut write_mark = match d.mark_want_write() {
         None => {
@@ -841,7 +841,7 @@ fn check_auth (hh: &handshake::HalfHandshake, d: &mut LockReadGuard<Device>) {
     };
 
     let pub_key = &X25519PublicKey::from(&hh.peer_static_public[..]);
-    
+
     // check if we have a peer already and return
     if device.peers.get(pub_key).is_some() {
         return;
@@ -850,8 +850,11 @@ fn check_auth (hh: &handshake::HalfHandshake, d: &mut LockReadGuard<Device>) {
     // call auth script: this MUST return ip in CIDR format x.x.x.x/32
     let external_auth = Command::new(auth_script)
                         .arg("wg")
+                        .arg("up")
                         .arg("--pubkey")
                         .arg(base64::encode(pub_key.as_bytes()))
+                        .arg("--remote-ip")
+                        .arg(remote_addr.to_string())
                         .output();
 
     // response should contain the allowed ip + preshared-key seperated by new lines
@@ -868,11 +871,11 @@ fn check_auth (hh: &handshake::HalfHandshake, d: &mut LockReadGuard<Device>) {
                         match ip {
                             Some(allowed_ip) => {
                                 set_peer(
-                                    &mut device, 
-                                    X25519PublicKey::from(&hh.peer_static_public[..]), 
+                                    &mut device,
+                                    X25519PublicKey::from(&hh.peer_static_public[..]),
                                     vec![allowed_ip],
                                     psk,
-                                );   
+                                );
                             },
                             None => return
                         }
@@ -885,7 +888,7 @@ fn check_auth (hh: &handshake::HalfHandshake, d: &mut LockReadGuard<Device>) {
             }
         }
     }
-    
+
 }
 
 fn set_peer(
@@ -899,7 +902,7 @@ fn set_peer(
     let replace_ips = false;
     let endpoint = None;
     let keepalive = None;
-    
+
     d.update_peer(
         pub_key,
         remove,
