@@ -3,6 +3,7 @@
 
 use crate::device::errno_str;
 use crate::device::Error;
+use users;
 use libc::*;
 
 pub fn get_saved_ids() -> Result<(uid_t, gid_t), Error> {
@@ -24,15 +25,27 @@ pub fn get_saved_ids() -> Result<(uid_t, gid_t), Error> {
     Ok((saved_uid, saved_gid))
 }
 
-pub fn drop_privileges() -> Result<(), Error> {
-    let (saved_uid, saved_gid) = get_saved_ids()?;
+pub fn drop_privileges(username: Option<&str>) -> Result<(), Error> {
 
-    if -1 == unsafe { setgid(saved_gid) } {
+    let (uid, gid) = match username {
+        Some(name) => {
+            let user = match users::get_user_by_name(name) {
+                Some(user) => user,
+                None => return Err(Error::DropPrivileges("unknown user supplied to --user".to_owned())),
+            };
+            (user.uid(), user.primary_group_id())
+
+        },
+        None => get_saved_ids()?,
+    };
+
+
+    if -1 == unsafe { setgid(gid) } {
         // Set real and effective group ID
         return Err(Error::DropPrivileges(errno_str()));
     }
 
-    if -1 == unsafe { setuid(saved_uid) } {
+    if -1 == unsafe { setuid(uid) } {
         // Set  real and effective user ID
         return Err(Error::DropPrivileges(errno_str()));
     }

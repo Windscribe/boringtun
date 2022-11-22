@@ -111,6 +111,11 @@ fn main() {
                 .long("disable-drop-privileges")
                 .env("WG_SUDO")
                 .help("Do not drop sudo privileges"),
+            Arg::with_name("user")
+                .takes_value(true)
+                .long("user")
+                .env("WG_USER")
+                .help("Drop root privileges to this user"),
             Arg::with_name("disable-connected-udp")
                 .long("disable-connected-udp")
                 .help("Disable connected UDP sockets to each peer"),
@@ -128,6 +133,7 @@ fn main() {
     let peer_auth = matches.value_of("peer-auth").unwrap_or_default();
     let listen_port: u16 = matches.value_of("listen-port").unwrap_or_default().parse().unwrap_or_default();
     let init_pkey = matches.value_of("private-key").unwrap_or_default();
+    let perm_down_user = matches.value_of("user");
     let init_address = matches.value_of("address").unwrap_or_default();
     let init_mtu = matches.value_of("mtu").unwrap_or_default();
 
@@ -143,7 +149,7 @@ fn main() {
             },
         };
     }
-    
+
     // Create a socketpair to communicate between forked processes
     let (sock1, sock2) = UnixDatagram::pair().unwrap();
     let _ = sock1.set_nonblocking(true);
@@ -201,7 +207,7 @@ fn main() {
     };
 
     if !matches.is_present("disable-drop-privileges") {
-        if let Err(e) = drop_privileges() {
+        if let Err(e) = drop_privileges(perm_down_user) {
             eprintln!("Failed to drop privileges: {:?}", e);
             sock1.send(&[0]).unwrap();
             exit(1);
