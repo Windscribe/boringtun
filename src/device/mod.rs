@@ -421,17 +421,9 @@ impl Device {
             port = udp_sock4.port()?;
         }
 
-        let udp_sock6 = Arc::new(
-            UDPSocket::new6()?
-                .set_non_blocking()?
-                .set_reuse()?
-                .bind(port)?,
-        );
 
         self.register_udp_handler(Arc::clone(&udp_sock4))?;
-        self.register_udp_handler(Arc::clone(&udp_sock6))?;
         self.udp4 = Some(udp_sock4);
-        self.udp6 = Some(udp_sock6);
 
         self.listen_port = port;
 
@@ -479,10 +471,6 @@ impl Device {
 
         // First set fwmark on listeners
         if let Some(ref sock) = self.udp4 {
-            sock.set_fwmark(mark)?;
-        }
-
-        if let Some(ref sock) = self.udp6 {
             sock.set_fwmark(mark)?;
         }
 
@@ -761,7 +749,6 @@ impl Device {
                 let mtu = d.mtu.load(Ordering::Relaxed);
 
                 let udp4 = d.udp4.as_ref().expect("Not connected");
-                let udp6 = d.udp6.as_ref().expect("Not connected");
 
                 let peers = &d.peers_by_ip;
                 for _ in 0..MAX_ITR {
@@ -801,8 +788,6 @@ impl Device {
                                 conn.write(packet);
                             } else if let Some(addr @ SocketAddr::V4(_)) = endpoint.addr {
                                 udp4.sendto(packet, addr);
-                            } else if let Some(addr @ SocketAddr::V6(_)) = endpoint.addr {
-                                udp6.sendto(packet, addr);
                             } else {
                                 eprintln!("No endpoint for peer");
                             }
